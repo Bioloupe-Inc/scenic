@@ -47,9 +47,8 @@ module Scenic
         def capture_dependent_state(dependents)
           dependents.each_with_object({}) do |view_name, state|
             view_info = find_view_info(view_name)
-            unqualified_name = view_name.split('.').last
-            indexes = Indexes.new(connection: adapter.connection).on(unqualified_name)
-            
+            indexes = find_indexes(view_name)
+
             state[view_name] = {
               definition: view_info.definition,
               materialized: view_info.materialized,
@@ -60,18 +59,75 @@ module Scenic
 
         def find_view_info(view_name)
           unqualified_name = view_name.split('.').last
-          adapter.views.find { |v| v.name == view_name || v.name == unqualified_name } ||
-            raise("View '#{view_name}' not found in adapter.views")
+          schema_name = view_name.include?('.') ? view_name.split('.').first : 'public'
+
+          # Try to find in adapter.views first (for views in search path)
+          view = adapter.views.find { |v| v.name == view_name || v.name == unqualified_name }
+          return view if view
+
+          # If not found, query directly from PostgreSQL (for views outside search path)
+          result = adapter.connection.execute(<<-SQL).first
+            SELECT
+              pg_get_viewdef(c.oid) AS definition,
+              c.relkind AS kind
+            FROM pg_class c
+            LEFT JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE c.relname = '#{unqualified_name}'
+              AND n.nspname = '#{schema_name}'
+              AND c.relkind IN ('m', 'v')
+          SQL
+
+          raise("View '#{view_name}' not found in database") unless result
+
+          Scenic::View.new(
+            name: view_name,
+            definition: result["definition"].strip,
+            materialized: result["kind"] == "m"
+          )
+        end
+
+        def find_indexes(view_name)
+          unqualified_name = view_name.split('.').last
+          schema_name = view_name.include?('.') ? view_name.split('.').first : 'public'
+
+          # Try standard Indexes class first (for views in search path)
+          indexes = Indexes.new(connection: adapter.connection).on(unqualified_name)
+          return indexes unless indexes.empty?
+
+          # If no indexes found, try querying specific schema
+          results = adapter.connection.execute(<<-SQL)
+            SELECT
+              t.relname as object_name,
+              i.relname as index_name,
+              pg_get_indexdef(d.indexrelid) AS definition
+            FROM pg_class t
+            INNER JOIN pg_index d ON t.oid = d.indrelid
+            INNER JOIN pg_class i ON d.indexrelid = i.oid
+            LEFT JOIN pg_namespace tn ON tn.oid = t.relnamespace
+            LEFT JOIN pg_namespace in_ns ON in_ns.oid = i.relnamespace
+            WHERE i.relkind = 'i'
+              AND d.indisprimary = 'f'
+              AND t.relname = '#{unqualified_name}'
+              AND tn.nspname = '#{schema_name}'
+            ORDER BY i.relname
+          SQL
+
+          results.map do |result|
+            Scenic::Index.new(
+              object_name: result["object_name"],
+              index_name: result["index_name"],
+              definition: result["definition"]
+            )
+          end
         end
 
         def drop_dependent_view(view_name)
           view_info = find_view_info(view_name)
-          unqualified_name = view_name.split('.').last
-          
+
           if view_info.materialized
-            adapter.drop_materialized_view(unqualified_name)
+            adapter.drop_materialized_view(view_name)
           else
-            adapter.drop_view(unqualified_name)
+            adapter.drop_view(view_name)
           end
         end
 
@@ -87,20 +143,19 @@ module Scenic
         end
 
         def recreate_dependent_view(view_name, state)
-          unqualified_name = view_name.split('.').last
           view_type = state[:materialized] ? "materialized view" : "view"
-          
+
           speaker.say "   -> Recreating dependent #{view_type} '#{view_name}'"
-          
+
           if state[:materialized]
-            adapter.create_materialized_view(unqualified_name, state[:definition])
+            adapter.create_materialized_view(view_name, state[:definition])
           else
-            adapter.create_view(unqualified_name, state[:definition])
+            adapter.create_view(view_name, state[:definition])
           end
-          
+
           IndexCreation.new(connection: adapter.connection, speaker: speaker)
                       .try_create(state[:indexes])
-          
+
         end
 
         def update_base_only
