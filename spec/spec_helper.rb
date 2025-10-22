@@ -26,14 +26,21 @@ RSpec.configure do |config|
       ActiveRecord::SchemaMigration.create_table
     end
 
+    # Clean up any test views before starting (in case previous test left them)
+    connection = ActiveRecord::Base.connection
+    %w[cascade_reports cascade_summary cascade_solos cascade_bases cascade_dependent children search_results greetings].each do |view|
+      connection.execute("DROP MATERIALIZED VIEW IF EXISTS #{view} CASCADE") rescue nil
+      connection.execute("DROP VIEW IF EXISTS #{view} CASCADE") rescue nil
+    end
+
     DatabaseCleaner.start
     example.run
     DatabaseCleaner.clean
-    
-    # Clean up any cascade test views that might persist
-    connection = ActiveRecord::Base.connection
-    %w[cascade_reports cascade_summary cascade_solos cascade_bases cascade_dependent].each do |view|
+
+    # Clean up any test views after test completes
+    %w[cascade_reports cascade_summary cascade_solos cascade_bases cascade_dependent children search_results greetings].each do |view|
       connection.execute("DROP MATERIALIZED VIEW IF EXISTS #{view} CASCADE") rescue nil
+      connection.execute("DROP VIEW IF EXISTS #{view} CASCADE") rescue nil
     end
   end
 

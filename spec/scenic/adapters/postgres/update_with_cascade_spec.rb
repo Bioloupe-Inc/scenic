@@ -147,16 +147,18 @@ module Scenic
             ).update
 
             # Verify drop order (reverse dependency): level3 → level2 → level1 → base
-            expect(adapter).to have_received(:drop_materialized_view).with("level3").ordered
-            expect(adapter).to have_received(:drop_materialized_view).with("level2").ordered
-            expect(adapter).to have_received(:drop_materialized_view).with("level1").ordered
+            # Note: Dependent views use fully-qualified names for cross-schema support
+            expect(adapter).to have_received(:drop_materialized_view).with("public.level3").ordered
+            expect(adapter).to have_received(:drop_materialized_view).with("public.level2").ordered
+            expect(adapter).to have_received(:drop_materialized_view).with("public.level1").ordered
             expect(adapter).to have_received(:drop_materialized_view).with("base").ordered
 
             # Verify creation order: base → level1 → level2 → level3
+            # Note: Dependent views use fully-qualified names for cross-schema support
             expect(adapter).to have_received(:create_materialized_view).with("base", new_definition, {no_data: false}).ordered
-            expect(adapter).to have_received(:create_materialized_view).with("level1", anything).ordered
-            expect(adapter).to have_received(:create_materialized_view).with("level2", anything).ordered
-            expect(adapter).to have_received(:create_materialized_view).with("level3", anything).ordered
+            expect(adapter).to have_received(:create_materialized_view).with("public.level1", anything).ordered
+            expect(adapter).to have_received(:create_materialized_view).with("public.level2", anything).ordered
+            expect(adapter).to have_received(:create_materialized_view).with("public.level3", anything).ordered
           end
         end
 
