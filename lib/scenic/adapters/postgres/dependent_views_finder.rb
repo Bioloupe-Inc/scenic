@@ -9,7 +9,7 @@ module Scenic
 
         def find
           raw_dependents = connection.select_rows(dependents_sql)
-          topologically_sort_dependents(raw_dependents)
+          topologically_sort_dependents(raw_dependents).uniq
         end
 
         private
